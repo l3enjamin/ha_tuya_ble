@@ -5,10 +5,12 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 from enum import IntEnum
+from typing import Any
 
 from homeassistant.components.cover import (
     CoverEntityFeature,
     CoverEntity,
+    CoverDeviceClass,
     ATTR_POSITION
 )
 from homeassistant.config_entries import ConfigEntry
@@ -54,6 +56,43 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         """Return the supported features of the device."""
         return self.platform_config.get("supported_features")
 
+    @property
+    def device_class(self) -> CoverDeviceClass:
+        """Return device class."""
+        return CoverDeviceClass.CURTAIN
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return additional state attributes including battery."""
+        attributes = {}
+        
+        # Add battery percentage if available
+        battery_dp = self.get_tuya_datapoint("battery_percentage")
+        if battery_dp and battery_dp in self._device.datapoints:
+            battery_datapoint = self._device.datapoints[battery_dp]
+            if battery_datapoint:
+                attributes["battery_percentage"] = battery_datapoint.value
+                
+        # Add work state if available (DP7)
+        if 7 in self._device.datapoints:
+            work_state_dp = self._device.datapoints[7]
+            if work_state_dp:
+                attributes["work_state"] = work_state_dp.value
+            
+        # Add fault status if available (DP12)
+        if 12 in self._device.datapoints:
+            fault_dp = self._device.datapoints[12]
+            if fault_dp:
+                attributes["fault_code"] = fault_dp.value
+                
+        # Add temperature if available (DP103)
+        if 103 in self._device.datapoints:
+            temp_dp = self._device.datapoints[103]
+            if temp_dp:
+                attributes["temperature"] = temp_dp.value
+            
+        return attributes if attributes else None
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -64,6 +103,7 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         )
         cover_state_dp = self.get_tuya_datapoint("state")
         cover_position_dp = self.get_tuya_datapoint("current_position")
+        
         if cover_state_dp:
             datapoint = self._device.datapoints[cover_state_dp]
             if datapoint:
@@ -189,7 +229,6 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
             if self._attr_current_cover_position != new_pos:
                 self._update_ha_state_for_cover(state)
 
-
     async def async_open_cover(self, **kwargs) -> None:
         """Open a cover."""
         await self._update_cover_state(TuyaCoverState.OPEN)
@@ -199,7 +238,7 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         await self._update_cover_state(TuyaCoverState.STOP)
 
     async def async_close_cover(self, **kwargs) -> None:
-        """Set new target temperature."""
+        """Close a cover."""
         await self._update_cover_state(TuyaCoverState.CLOSE)
 
     async def async_set_cover_position(self, **kwargs: logging.Any) -> None:
@@ -222,7 +261,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Tuya BLE covers."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
-    mappings = data.device.datapoints if hasattr(data.device, 'datapoints') else {}
     
     # Check if this device supports cover platform
     product_info = data.product
