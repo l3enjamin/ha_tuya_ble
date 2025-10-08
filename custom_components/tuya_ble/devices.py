@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import logging
-from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
+from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID, Platform
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from homeassistant.components.cover import CoverEntityFeature
 
 from home_assistant_bluetooth import BluetoothServiceInfoBleak
 from .tuya_ble import (
@@ -60,6 +61,8 @@ class TuyaBLEProductInfo:
     name: str
     manufacturer: str = DEVICE_DEF_MANUFACTURER
     fingerbot: TuyaBLEFingerbotInfo | None = None
+    # Add datapoints for platform support
+    datapoints: dict[Platform, dict[str, int] | list[dict[str, int]]] | None = None
 
 class TuyaBLEEntity(CoordinatorEntity):
     """Tuya BLE base entity."""
@@ -96,6 +99,17 @@ class TuyaBLEEntity(CoordinatorEntity):
     def device(self) -> TuyaBLEDevice:
         """Return the associated BLE Device."""
         return self._device
+
+    @property
+    def platform_config(self) -> dict:
+        """Return the platform configuration."""
+        if hasattr(self, '_PLATFORM') and self._product.datapoints:
+            return self._product.datapoints.get(self._PLATFORM, {})
+        return {}
+
+    def get_tuya_datapoint(self, datapoint) -> int:
+        """Return a datapoint from config."""
+        return self.platform_config.get(datapoint)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -348,7 +362,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     ),
     "szjqr": TuyaBLECategoryInfo(
         products={
-            "3yqdo5yt": TuyaBLEProductInfo(  # device product_id
+            "3yqdo5yt": TuyaBLEProductInfo(
                 name="CUBETOUCH 1s",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -359,7 +373,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     reverse_positions=4,
                 ),
             ),
-            "xhf790if": TuyaBLEProductInfo(  # device product_id
+            "xhf790if": TuyaBLEProductInfo(
                 name="CubeTouch II",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -484,6 +498,53 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             ),
         },
     ),
+    # Add curtain motor support from pantherale0's fork
+    "cl": TuyaBLECategoryInfo(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],
+                TuyaBLEProductInfo(
+                    name="Blind Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": False
+                        },
+                    }
+                )
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0xpi"
+                ],
+                TuyaBLEProductInfo(
+                    name="Curtain Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "current_position": 3,
+                            "position_set": 2,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            )
+        }
+    ),
     "dd": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
@@ -579,4 +640,3 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
         ),
     )
     return result
-
