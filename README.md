@@ -10,7 +10,7 @@ _Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot)
 
 Place the `custom_components` folder in your configuration directory (or add its contents to an existing `custom_components` folder). Alternatively install via [HACS](https://hacs.xyz/).
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=airy10&repository=ha_tuya_ble&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=l3enjamin&repository=ha_tuya_ble&category=integration)
 
 ## Usage
 
@@ -29,6 +29,16 @@ The integration works locally, but connection to Tuya BLE device requires device
 
   All features available in Home Assistant, programming (series of actions) is implemented for Fingerbot Plus.
   For programming exposed entities 'Program' (switch), 'Repeat forever', 'Repeats count', 'Idle position' and 'Program' (text). Format of program text is: 'position\[/time\];...' where position is in percents, optional time is in seconds (zero if missing).
+
+* Curtain Motors and Blind Controllers (category_id 'cl')
+  + Blind Controller (product_ids '4pbr8eig', 'qqdxfdht'), supports open/close/stop and position control.
+  + Curtain Controller (product_id 'kcy0xpi'), supports open/close/stop, position control, and state feedback.
+
+  Both devices are exposed as Cover entities in Home Assistant with full control capabilities including:
+  - Open, Close, Stop commands
+  - Position control (0-100%)
+  - Current position feedback
+  - Opening/closing state indicators
 
 * Temperature and humidity sensors (category_id 'wsdcg')
   + Soil moisture sensor (product_id 'ojzlzzsw').
@@ -54,6 +64,21 @@ The integration works locally, but connection to Tuya BLE device requires device
     
     *Note that some light products are using Bluetooth Mesh protocols and not BLE and so aren't compatible with this integration. That's probably the case if your product isn't at least found (even if non-working) by this integration*
 
+## Changelog
+
+### Changes in this Fork
+
+- **Added Home Assistant 2025.7 compatibility**: Fixed import issues that broke the integration in HA 2025.7.
+- **Added curtain motor support**: Integrated curtain motor and blind controller support from pantherale0's preview branch.
+- **Enhanced device database**: Added support for 'cl' category devices including blind controllers and curtain motors.
+- **Cover platform**: Added a new Cover platform to handle curtain motors with full open/close/stop/position control.
+
+### Integration Features
+
+This fork combines:
+- The 2025.7 compatibility fixes from [airy10/ha_tuya_ble](https://github.com/airy10/ha_tuya_ble)
+- The curtain motor support from [pantherale0/ha_tuya_ble](https://github.com/pantherale0/ha_tuya_ble) preview branch
+
 ## Support project
 
 I am working on this integration in Ukraine. Our country was subjected to brutal aggression by Russia. The war still continues. The capital of Ukraine - Kyiv, where I live, and many other cities and villages are constantly under threat of rocket attacks. Our air defense forces are doing wonders, but they also need support. So if you want to help the development of this integration, donate some money and I will spend it to support our air defense.
@@ -61,4 +86,3 @@ I am working on this integration in Ukraine. Our country was subjected to brutal
 <p align="center">
   <a href="https://www.buymeacoffee.com/3PaK6lXr4l"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy me an air defense"></a>
 </p>
-
