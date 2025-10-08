@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog],
 and this project adheres to [Semantic Versioning].
 
+## [0.2.0] - 2025-10-08 (l3enjamin fork)
+
+### Added
+
+- **Home Assistant 2025.7 compatibility**: Fixed import issues that broke the integration in HA 2025.7
+- **Curtain motor support**: Added support for curtain motors and blind controllers (category_id 'cl')
+  - Blind Controller (product_ids '4pbr8eig', 'qqdxfdht')
+  - Curtain Controller (product_id 'kcy0xpi')
+- **Cover platform**: New Cover platform for curtain/blind control with features:
+  - Open, Close, Stop commands
+  - Position control (0-100%)
+  - Current position feedback
+  - Opening/closing state indicators
+- **Enhanced device database**: Extended TuyaBLEProductInfo to support platform-specific datapoint configurations
+- **Platform configuration support**: Added platform_config property to TuyaBLEEntity for platform-specific settings
+
+### Changed
+
+- Updated devices.py to include datapoints configuration for curtain motors
+- Enhanced TuyaBLEEntity with get_tuya_datapoint method for easier datapoint access
+- Added Platform.COVER to supported platforms list
+
+### Technical Notes
+
+This fork integrates:
+- The 2025.7 compatibility fixes from [airy10/ha_tuya_ble](https://github.com/airy10/ha_tuya_ble)
+- The curtain motor support from [pantherale0/ha_tuya_ble](https://github.com/pantherale0/ha_tuya_ble) preview branch
+
 ## [0.1.0] - 2023-04-22
 
 - Initial release
