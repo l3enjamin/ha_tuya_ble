@@ -389,6 +389,51 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
             ],
         },
     ),
+    # ADD YOUR DEVICE HERE - Curtain Motors with Battery & Temperature
+    "cl": TuyaBLECategorySensorMapping(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],  # Blind Controller
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),  # Standard battery sensor
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0xpi"
+                ],  # Curtain Controller  
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),  # Battery sensor
+                    TuyaBLETemperatureMapping(dp_id=103),  # Temperature sensor
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"  # YOUR DEVICE - LY Curtain Motor Robot
+                ],
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),  # Battery percentage (40%)
+                    TuyaBLETemperatureMapping(dp_id=103),  # Temperature sensor (17°C)
+                    TuyaBLESensorMapping(
+                        dp_id=7,
+                        description=SensorEntityDescription(
+                            key="work_state",
+                            icon="mdi:cog",
+                            device_class=SensorDeviceClass.ENUM,
+                            options=[
+                                "success",
+                                "fault",
+                                "learning",
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        },
+    ),
 }
 
 
