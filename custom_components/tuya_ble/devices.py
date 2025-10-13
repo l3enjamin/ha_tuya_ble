@@ -498,7 +498,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             ),
         },
     ),
-    # Add curtain motor support from pantherale0's fork
+    # FIXED: Curtain motor support with proper syntax
     "cl": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
@@ -522,36 +522,6 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     }
                 )
             ),
-			**dict.fromkeys(
-			    [
-			        "ulughw4g"  # Your device: LY卷帘窗帘机器人
-			    ],
-			    TuyaBLEProductInfo(
-			        name="LY Curtain Motor Robot",
-			        manufacturer="Tuya",
-			        datapoints={
-			            Platform.COVER: {
-			                "state": 1,                    # control enum (open/stop/close)
-			                "position_set": 2,             # percent_control 
-			                "current_position": 3,         # percent_state
-			                "battery_percentage": 13,      # battery_percentage
-			                "supported_features": (
-			                    CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
-			                    CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
-			                ),
-			                "use_state_set": True
-			            },
-			            Platform.SENSOR: [
-			                {
-			                    "battery_percentage": 13,  # DP13 - Battery sensor
-			                },
-			                {
-			                    "temperature": 103,        # DP103 - Temperature sensor
-			                }
-			            ]
-			        }
-			    )
-			)
             **dict.fromkeys(
                 [
                     "kcy0xpi"
@@ -572,7 +542,28 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                         },
                     }
                 )
-            )
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"  # YOUR DEVICE - LY Curtain Motor Robot
+                ],
+                TuyaBLEProductInfo(
+                    name="LY Curtain Motor Robot",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,                    # control enum (open/stop/close)
+                            "position_set": 2,             # percent_control 
+                            "current_position": 3,         # percent_state
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            ),
         }
     ),
     "dd": TuyaBLECategoryInfo(
@@ -584,12 +575,12 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             TuyaBLEProductInfo(
                 name="LGB102 Magic Strip Lights",
                 manufacturer="Magiacous",
-		),
+\t\t),
             ),
         },
         info = TuyaBLEProductInfo(
                 name="Strip Lights",
-		),
+\t\t),
 
     ),
 }
