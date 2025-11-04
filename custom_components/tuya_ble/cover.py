@@ -16,6 +16,7 @@ from homeassistant.components.cover import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -49,7 +50,9 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
     ) -> None:
-        super().__init__(hass, coordinator, device, product)
+        # FIX #1: Add the missing EntityDescription parameter
+        description = EntityDescription(key="cover", name="Cover")
+        super().__init__(hass, coordinator, device, product, description)
 
     @property
     def supported_features(self) -> CoverEntityFeature:
@@ -96,10 +99,11 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        # FIX #2: Fixed the problematic __dict__() call
         _LOGGER.debug(
-            "Updated data for %s: %s",
+            "Updated data for %s: datapoints=%s",
             self._device.name,
-            self._device.datapoints.__dict__()
+            list(self._device.datapoints.keys())  # Safe way to show datapoints
         )
         cover_state_dp = self.get_tuya_datapoint("state")
         cover_position_dp = self.get_tuya_datapoint("current_position")
@@ -262,22 +266,3 @@ async def async_setup_entry(
     """Set up the Tuya BLE covers."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     
-    # Check if this device supports cover platform
-    product_info = data.product
-    if not product_info or not hasattr(product_info, 'datapoints'):
-        return
-        
-    cover_datapoints = product_info.datapoints.get(Platform.COVER)
-    if not cover_datapoints:
-        return
-        
-    entities: list[TuyaBLECover] = []
-    entities.append(
-        TuyaBLECover(
-            hass,
-            data.coordinator,
-            data.device,
-            data.product,
-        )
-    )
-    async_add_entities(entities)
