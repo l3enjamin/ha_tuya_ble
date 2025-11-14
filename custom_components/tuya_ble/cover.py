@@ -265,4 +265,26 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Tuya BLE covers."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
+    # Check if this device is a cover (has cover platform config)
+    if (
+        data.product.datapoints
+        and Platform.COVER in data.product.datapoints
+    ):
+        async_add_entities([
+            TuyaBLECover(
+                hass,
+                data.coordinator,
+                data.device,
+                data.product,
+            )
+        ])
+        _LOGGER.info(
+            "Added cover entity for device: %s",
+            data.device.name
+        )
+    else:
+        _LOGGER.debug(
+            "Device %s does not have cover platform configuration",
+            data.device.name
+        )
     
