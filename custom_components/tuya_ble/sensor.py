@@ -389,7 +389,7 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
             ],
         },
     ),
-    # ADD YOUR DEVICE HERE - Curtain Motors with Battery & Temperature
+    # Curtain Motors with Battery & Temperature
     "cl": TuyaBLECategorySensorMapping(
         products={
             **dict.fromkeys(
@@ -398,7 +398,7 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                     "qqdxfdht"
                 ],  # Blind Controller
                 [
-                    TuyaBLEBatteryMapping(dp_id=13),  # Standard battery sensor
+                    TuyaBLEBatteryMapping(dp_id=13),
                 ],
             ),
             **dict.fromkeys(
@@ -406,29 +406,39 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                     "kcy0xpi"
                 ],  # Curtain Controller  
                 [
-                    TuyaBLEBatteryMapping(dp_id=13),  # Battery sensor
-                    TuyaBLETemperatureMapping(dp_id=103),  # Temperature sensor
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    TuyaBLETemperatureMapping(dp_id=103),
                 ],
             ),
             **dict.fromkeys(
                 [
-                    "ulughw4g"  # YOUR DEVICE - LY Curtain Motor Robot
+                    "ulughw4g"  # LY Curtain Motor Robot
                 ],
                 [
-                    TuyaBLEBatteryMapping(dp_id=13),  # Battery percentage (40%)
-                    TuyaBLETemperatureMapping(dp_id=103),  # Temperature sensor (17°C)
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    TuyaBLETemperatureMapping(
+                        dp_id=103,
+                        coefficient=10.0,  # Temperature has scale of 1, so divide by 10
+                    ),
                     TuyaBLESensorMapping(
                         dp_id=7,
                         description=SensorEntityDescription(
                             key="work_state",
-                            icon="mdi:cog",
+                            icon="mdi:state-machine",
                             device_class=SensorDeviceClass.ENUM,
                             options=[
-                                "success",
-                                "fault",
+                                "standby",
                                 "learning",
+                                "success",
+                                "fail",
                             ],
                         ),
+                        icons=[
+                            "mdi:sleep",
+                            "mdi:school",
+                            "mdi:check-circle",
+                            "mdi:alert-circle",
+                        ],
                     ),
                 ],
             ),
