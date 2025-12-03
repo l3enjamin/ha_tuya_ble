@@ -31,6 +31,9 @@ from .const import (
     GATT_MTU,
     MANUFACTURER_DATA_ID,
     RESPONSE_WAIT_TIMEOUT,
+    MAX_CONNECTION_ATTEMPTS,
+    MAX_RECONNECT_ATTEMPTS,
+    RECONNECT_LONG_BACKOFF,
     SERVICE_UUID,
     TuyaBLECode,
     TuyaBLEDataPointType,
@@ -299,6 +302,10 @@ class TuyaBLEDevice:
 
         self._function = {}
         self._status_range = {}
+        
+        # Track reconnect attempts to prevent infinite loops
+        self._reconnect_attempts = 0
+        self._last_reconnect_time = 0
 
 
     def set_ble_device_and_advertisement_data(
@@ -664,20 +671,28 @@ class TuyaBLEDevice:
             await asyncio.sleep(0.01)
             if self._client and self._client.is_connected and self._is_paired:
                 return
-            attempts_count = 100
+            
+            # Reduced from 100 to 5 attempts - don't block for 100 minutes!
+            attempts_count = MAX_CONNECTION_ATTEMPTS
+            
             while attempts_count > 0:
                 attempts_count -= 1
                 if attempts_count == 0:
                     _LOGGER.error(
-                        "%s: Connecting, all attempts failed; RSSI: %s",
+                        "%s: Connecting, all %d attempts failed; RSSI: %s",
                         self.address,
+                        MAX_CONNECTION_ATTEMPTS,
                         self.rssi,
                     )
                     raise BleakNotFoundError()
                 try:
                     async with global_connect_lock:
                         _LOGGER.debug(
-                            "%s: Connecting; RSSI: %s", self.address, self.rssi
+                            "%s: Connecting (attempt %d/%d); RSSI: %s",
+                            self.address,
+                            MAX_CONNECTION_ATTEMPTS - attempts_count,
+                            MAX_CONNECTION_ATTEMPTS,
+                            self.rssi,
                         )
                         client = await establish_connection(
                             BleakClientWithServiceCache,
@@ -774,6 +789,8 @@ class TuyaBLEDevice:
             if self._client.is_connected:
                 if self._is_paired:
                     _LOGGER.debug("%s: Successfully connected", self.address)
+                    # Reset reconnect counter on successful connection
+                    self._reconnect_attempts = 0
                     self._fire_connected_callbacks()
                 else:
                     _LOGGER.error("%s: Connected but not paired", self.address)
@@ -784,25 +801,73 @@ class TuyaBLEDevice:
 
     async def _reconnect(self) -> None:
         """Attempt a reconnect"""
-        _LOGGER.debug("%s: Reconnect, ensuring connection", self.address)
+        # Check if we should back off
+        current_time = time.time()
+        
+        # If we've exhausted reconnect attempts, wait for long backoff period
+        if self._reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+            time_since_last = current_time - self._last_reconnect_time
+            if time_since_last < RECONNECT_LONG_BACKOFF:
+                wait_time = RECONNECT_LONG_BACKOFF - time_since_last
+                _LOGGER.warning(
+                    "%s: Exhausted %d reconnect attempts. "
+                    "Waiting %.0f minutes before trying again.",
+                    self.address,
+                    MAX_RECONNECT_ATTEMPTS,
+                    wait_time / 60,
+                )
+                await asyncio.sleep(wait_time)
+            # Reset counter after long backoff
+            self._reconnect_attempts = 0
+        
+        self._reconnect_attempts += 1
+        self._last_reconnect_time = current_time
+        
+        _LOGGER.debug(
+            "%s: Reconnect attempt %d/%d, ensuring connection",
+            self.address,
+            self._reconnect_attempts,
+            MAX_RECONNECT_ATTEMPTS,
+        )
+        
         async with self._seq_num_lock:
             self._current_seq_num = 1
+        
         try:
             if self._expected_disconnect:
                 return
             await self._ensure_connected()
             if self._expected_disconnect:
                 return
-            _LOGGER.debug("%s: Reconnect, connection ensured", self.address)
+            _LOGGER.debug("%s: Reconnect successful", self.address)
         except BLEAK_EXCEPTIONS:  # BleakNotFoundError:
             _LOGGER.debug(
-                "%s: Reconnect, failed to ensure connection - backing off",
+                "%s: Reconnect attempt %d/%d failed - backing off %ds",
                 self.address,
+                self._reconnect_attempts,
+                MAX_RECONNECT_ATTEMPTS,
+                BLEAK_BACKOFF_TIME,
                 exc_info=True,
             )
             await asyncio.sleep(BLEAK_BACKOFF_TIME)
-            _LOGGER.debug("%s: Reconnecting again", self.address)
-            asyncio.create_task(self._reconnect())
+            
+            # Only schedule another reconnect if we haven't exhausted attempts
+            if self._reconnect_attempts < MAX_RECONNECT_ATTEMPTS:
+                _LOGGER.debug("%s: Scheduling reconnect attempt %d/%d",
+                    self.address,
+                    self._reconnect_attempts + 1,
+                    MAX_RECONNECT_ATTEMPTS,
+                )
+                asyncio.create_task(self._reconnect())
+            else:
+                _LOGGER.warning(
+                    "%s: Exhausted all reconnect attempts. "
+                    "Will try again in %.0f minutes.",
+                    self.address,
+                    RECONNECT_LONG_BACKOFF / 60,
+                )
+                # Schedule one final reconnect after long backoff
+                asyncio.create_task(self._reconnect())
 
     @staticmethod
     def _calc_crc16(data: bytes) -> int:
@@ -966,11 +1031,13 @@ class TuyaBLEDevice:
         await self._int_send_packet_while_connected(packets)
         if future:
             try:
+                # Reduced timeout from 60s to 10s - don't block event loop!
                 await asyncio.wait_for(future, RESPONSE_WAIT_TIMEOUT)
             except asyncio.TimeoutError:
                 _LOGGER.error(
-                    "%s: timeout receiving response, RSSI: %s",
+                    "%s: timeout receiving response after %ds, RSSI: %s",
                     self.address,
+                    RESPONSE_WAIT_TIMEOUT,
                     self.rssi,
                 )
                 result = False

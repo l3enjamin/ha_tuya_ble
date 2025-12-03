@@ -13,7 +13,17 @@ SERVICE_UUID = "0000a201-0000-1000-8000-00805f9b34fb"
 
 MANUFACTURER_DATA_ID = 0x07D0
 
-RESPONSE_WAIT_TIMEOUT = 60
+# Reduce from 60s to 10s - don't block event loop for too long!
+RESPONSE_WAIT_TIMEOUT = 10
+
+# Maximum connection attempts per reconnect cycle (was 100!)
+MAX_CONNECTION_ATTEMPTS = 5
+
+# Maximum reconnect attempts before giving up for a while
+MAX_RECONNECT_ATTEMPTS = 5
+
+# Long backoff time after exhausting all reconnect attempts (15 minutes)
+RECONNECT_LONG_BACKOFF = 900
 
 class TuyaBLECode(Enum):
     FUN_SENDER_DEVICE_INFO = 0x0000
