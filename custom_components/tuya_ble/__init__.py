@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, get_device
+from bleak_retry_connector import (
+    BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS,
+    BleakNotFoundError,
+    get_device,
+)
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
@@ -44,22 +48,73 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(
             f"Could not find Tuya BLE device with address {address}"
         )
+    
     manager = HASSTuyaBLEDeviceManager(hass, entry.options.copy())
     device = TuyaBLEDevice(manager, ble_device)
-    await device.initialize()
+    
+    # Add error handling for device initialization
+    try:
+        await device.initialize()
+    except BLEAK_EXCEPTIONS as ex:
+        _LOGGER.error(
+            "Failed to initialize Tuya BLE device %s: %s. "
+            "Device may be out of range, battery low, or experiencing interference. "
+            "Integration will retry on next restart.",
+            address,
+            ex,
+            exc_info=True,
+        )
+        raise ConfigEntryNotReady(
+            f"Could not initialize Tuya BLE device with address {address}: {ex}"
+        ) from ex
+    except BleakNotFoundError as ex:
+        _LOGGER.error(
+            "Tuya BLE device %s not found after connection attempts. "
+            "Device may be out of range or powered off. "
+            "Integration will retry on next restart.",
+            address,
+            exc_info=True,
+        )
+        raise ConfigEntryNotReady(
+            f"Tuya BLE device with address {address} not found: {ex}"
+        ) from ex
+    except Exception as ex:
+        _LOGGER.error(
+            "Unexpected error initializing Tuya BLE device %s: %s. "
+            "Integration will retry on next restart.",
+            address,
+            ex,
+            exc_info=True,
+        )
+        raise ConfigEntryNotReady(
+            f"Unexpected error with Tuya BLE device {address}: {ex}"
+        ) from ex
+    
     product_info = get_device_product_info(device)
-
     coordinator = TuyaBLECoordinator(hass, device)
 
-    '''
-    try:
-        await device.update()
-    except BLEAK_EXCEPTIONS as ex:
-        raise ConfigEntryNotReady(
-            f"Could not communicate with Tuya BLE device with address {address}"
-        ) from ex
-    '''
-    hass.add_job(device.update())
+    # Schedule device update as background task instead of blocking setup
+    # This prevents timeout issues from crashing the integration
+    async def _async_initial_update() -> None:
+        """Perform initial device update."""
+        try:
+            await device.update()
+        except BLEAK_EXCEPTIONS as ex:
+            _LOGGER.warning(
+                "Initial update failed for Tuya BLE device %s: %s. "
+                "Device may be temporarily unavailable. Will retry.",
+                address,
+                ex,
+            )
+        except Exception as ex:
+            _LOGGER.warning(
+                "Unexpected error during initial update for device %s: %s",
+                address,
+                ex,
+                exc_info=True,
+            )
+    
+    hass.async_create_task(_async_initial_update())
 
     @callback
     def _async_update_ble(

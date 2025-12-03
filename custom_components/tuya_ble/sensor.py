@@ -416,10 +416,9 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                 ],
                 [
                     TuyaBLEBatteryMapping(dp_id=13),
-                    TuyaBLETemperatureMapping(
-                        dp_id=103,
-                        coefficient=10.0,  # Temperature has scale of 1, so divide by 10
-                    ),
+                    # Temperature sensor - no coefficient needed, value is already in correct units
+                    # API shows scale=1 but actual value is already degrees Celsius (e.g., 20 = 20°C)
+                    TuyaBLETemperatureMapping(dp_id=103),
                     TuyaBLESensorMapping(
                         dp_id=7,
                         description=SensorEntityDescription(
