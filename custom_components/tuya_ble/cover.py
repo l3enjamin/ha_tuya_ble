@@ -50,7 +50,6 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
     ) -> None:
-        # FIX #1: Add the missing EntityDescription parameter
         description = EntityDescription(key="cover", name="Cover")
         super().__init__(hass, coordinator, device, product, description)
 
@@ -99,11 +98,11 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # FIX #2: Fixed the problematic __dict__() call
+        # Fixed: TuyaBLEDataPoints doesn't have keys() method, use list() instead
         _LOGGER.debug(
             "Updated data for %s: datapoints=%s",
             self._device.name,
-            list(self._device.datapoints.keys())  # Safe way to show datapoints
+            list(self._device.datapoints)  # Correctly iterate datapoints
         )
         cover_state_dp = self.get_tuya_datapoint("state")
         cover_position_dp = self.get_tuya_datapoint("current_position")
