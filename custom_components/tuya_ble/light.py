@@ -496,8 +496,12 @@ def update_mapping(category_description: tuple[TuyaLightEntityDescription], mapp
 
     return m
 
-def get_mapping_by_device(device: TuyaBLEDevice) -> tuple[TuyaLightEntityDescription]:
+def get_mapping_by_device(device: TuyaBLEDevice) -> tuple[TuyaLightEntityDescription] | None:
+    """Get light entity descriptions for device."""
     category_mapping = LIGHTS.get(device.category)
+    if category_mapping is None:
+        # Device category doesn't support lights
+        return None
 
     category = ProductsMapping.get(device.category)
     if category is not None:
@@ -879,6 +883,11 @@ async def async_setup_entry(
     """Set up the Tuya BLE sensors."""
     data: TuyaBLEData = entry.runtime_data
     descs = get_mapping_by_device(data.device)
+    
+    # Skip if device category doesn't support lights
+    if not descs:
+        return
+    
     entities: list[TuyaBLELight] = []
 
     for desc in descs:
