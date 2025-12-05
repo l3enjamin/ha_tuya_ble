@@ -388,6 +388,60 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
             ],
         },
     ),
+    # Curtain Motors with Battery & Temperature
+    "cl": TuyaBLECategorySensorMapping(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],  # Blind Controller
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0xpi"
+                ],  # Curtain Controller  
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    TuyaBLETemperatureMapping(dp_id=103),
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"  # LY Curtain Motor Robot
+                ],
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    # Temperature sensor - no coefficient needed, value is already in correct units
+                    # API shows scale=1 but actual value is already degrees Celsius (e.g., 20 = 20°C)
+                    TuyaBLETemperatureMapping(dp_id=103),
+                    TuyaBLESensorMapping(
+                        dp_id=7,
+                        description=SensorEntityDescription(
+                            key="work_state",
+                            icon="mdi:state-machine",
+                            device_class=SensorDeviceClass.ENUM,
+                            options=[
+                                "standby",
+                                "learning",
+                                "success",
+                                "fail",
+                            ],
+                        ),
+                        icons=[
+                            "mdi:sleep",
+                            "mdi:school",
+                            "mdi:check-circle",
+                            "mdi:alert-circle",
+                        ],
+                    ),
+                ],
+            ),
+        },
+    ),
 }
 
 
