@@ -9,15 +9,14 @@ from homeassistant.components.select import (
     SelectEntityDescription,
     SelectEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from . import TuyaBLEConfigEntry
 from .const import (
-    DOMAIN,
     FINGERBOT_MODE_PROGRAM,
     FINGERBOT_MODE_PUSH,
     FINGERBOT_MODE_SWITCH,
@@ -217,33 +216,6 @@ mapping: dict[str, TuyaBLECategorySelectMapping] = {
                         key="reminder_mode",
                         options=[
                             "interval_reminder",
-                            "schedule_reminder",
-                        ],
-                        entity_category=EntityCategory.CONFIG,
-                    ),
-                ),
-            ],
-        },
-    ),
-    "znhsb": TuyaBLECategorySelectMapping(
-        products={
-            "cdlandip":  # Smart water bottle
-            [
-                TuyaBLESelectMapping(
-                    dp_id=106,
-                    description=TemperatureUnitDescription(
-                        options=[
-                            UnitOfTemperature.CELSIUS,
-                            UnitOfTemperature.FAHRENHEIT,
-                        ],
-                    )
-                ),
-                TuyaBLESelectMapping(
-                    dp_id=107,
-                    description=SelectEntityDescription(
-                        key="reminder_mode",
-                        options=[
-                            "interval_reminder",
                             "alarm_reminder",
                         ],
                         entity_category=EntityCategory.CONFIG,
@@ -353,11 +325,11 @@ class TuyaBLESelect(TuyaBLEEntity, SelectEntity):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: TuyaBLEConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Tuya BLE sensors."""
-    data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
+    data: TuyaBLEData = entry.runtime_data
     mappings = get_mapping_by_device(data.device)
     entities: list[TuyaBLESelect] = []
     for mapping in mappings:
