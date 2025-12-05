@@ -12,7 +12,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
@@ -26,6 +25,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from . import TuyaBLEConfigEntry
 from .const import (
     BATTERY_STATE_HIGH,
     BATTERY_STATE_LOW,
@@ -35,7 +35,6 @@ from .const import (
     BATTERY_NOT_CHARGING,
     CO2_LEVEL_ALARM,
     CO2_LEVEL_NORMAL,
-    DOMAIN,
 )
 from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
@@ -480,11 +479,11 @@ class TuyaBLESensor(TuyaBLEEntity, SensorEntity):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: TuyaBLEConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Tuya BLE sensors."""
-    data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
+    data: TuyaBLEData = entry.runtime_data
     mappings = get_mapping_by_device(data.device)
     entities: list[TuyaBLESensor] = [
         TuyaBLESensor(
