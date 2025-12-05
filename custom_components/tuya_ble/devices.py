@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import logging
-from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
+from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID, Platform
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from homeassistant.components.cover import CoverEntityFeature
 
 from home_assistant_bluetooth import BluetoothServiceInfoBleak
 from .tuya_ble import (
@@ -60,6 +61,14 @@ class TuyaBLEProductInfo:
     name: str
     manufacturer: str = DEVICE_DEF_MANUFACTURER
     fingerbot: TuyaBLEFingerbotInfo | None = None
+    datapoints: dict[Platform, dict[str, int] | list[dict[str, int]]] | None = None
+
+
+@dataclass
+class TuyaBLECategoryInfo:
+    products: dict[str, TuyaBLEProductInfo]
+    info: TuyaBLEProductInfo | None = None
+
 
 class TuyaBLEEntity(CoordinatorEntity):
     """Tuya BLE base entity."""
@@ -67,7 +76,7 @@ class TuyaBLEEntity(CoordinatorEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: TuyaBLECoordinator,
+        coordinator: DataUpdateCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         description: EntityDescription,
@@ -96,6 +105,17 @@ class TuyaBLEEntity(CoordinatorEntity):
     def device(self) -> TuyaBLEDevice:
         """Return the associated BLE Device."""
         return self._device
+
+    @property
+    def platform_config(self) -> dict:
+        """Return the platform configuration."""
+        if hasattr(self, '_PLATFORM') and self._product.datapoints:
+            return self._product.datapoints.get(self._PLATFORM, {})
+        return {}
+
+    def get_tuya_datapoint(self, datapoint) -> int:
+        """Return a datapoint from config."""
+        return self.platform_config.get(datapoint)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -126,7 +146,6 @@ class TuyaBLEEntity(CoordinatorEntity):
             if code and value is not None:
                 dttype = self.get_dptype(code)
                 if isinstance(value, str):
-                    # We suppose here that cloud JSON type are sent as string
                     if dttype == DPType.STRING or dttype == DPType.JSON:
                         self.send_dp_value(code, TuyaBLEDataPointType.DT_STRING, value)
                     elif dttype == DPType.ENUM:
@@ -180,8 +199,6 @@ class TuyaBLEEntity(CoordinatorEntity):
         if prefer_function:
             order = ["function", "status_range"]
 
-        # When we are not looking for a specific datatype, we can append status for
-        # searching
         if not dptype:
             order.append("status")
 
@@ -236,8 +253,6 @@ class TuyaBLEEntity(CoordinatorEntity):
         return None
 
 
-
-
 class TuyaBLECoordinator(DataUpdateCoordinator[None]):
     """Data coordinator for receiving Tuya BLE updates."""
 
@@ -265,7 +280,9 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             self._unsub_disconnect()
         if self._disconnected:
             self._disconnected = False
-            self.async_update_listeners()
+            # Schedule listener updates as background task to avoid blocking
+            # This prevents deadlock when called during device connection
+            self.hass.loop.call_soon(self.async_update_listeners)
 
     @callback
     def _async_handle_update(self, updates: list[TuyaBLEDataPoint]) -> None:
@@ -312,16 +329,10 @@ class TuyaBLEData:
     coordinator: TuyaBLECoordinator
 
 
-@dataclass
-class TuyaBLECategoryInfo:
-    products: dict[str, TuyaBLEProductInfo]
-    info: TuyaBLEProductInfo | None = None
-
-
 devices_database: dict[str, TuyaBLECategoryInfo] = {
     "co2bj": TuyaBLECategoryInfo(
         products={
-            "59s19z5m": TuyaBLEProductInfo(  # device product_id
+            "59s19z5m": TuyaBLEProductInfo(
                 name="CO2 Detector",
             ),
         },
@@ -333,7 +344,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "ludzroix",
                     "isk2p555"
                 ],
-                    TuyaBLEProductInfo(  # device product_id
+                TuyaBLEProductInfo(
                     name="Smart Lock",
                 ),
             ),
@@ -341,14 +352,14 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     ),
     "jtmspro": TuyaBLECategoryInfo(
         products={
-            "xicdxood": TuyaBLEProductInfo(  # device product_id
+            "xicdxood": TuyaBLEProductInfo(
                 name="Raycube K7 Pro+",
             ),
         },
     ),
     "szjqr": TuyaBLECategoryInfo(
         products={
-            "3yqdo5yt": TuyaBLEProductInfo(  # device product_id
+            "3yqdo5yt": TuyaBLEProductInfo(
                 name="CUBETOUCH 1s",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -359,7 +370,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     reverse_positions=4,
                 ),
             ),
-            "xhf790if": TuyaBLEProductInfo(  # device product_id
+            "xhf790if": TuyaBLEProductInfo(
                 name="CubeTouch II",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -377,7 +388,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "yiihr7zh",
                     "riecov42",
                     "neq16kgd"
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -401,7 +412,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "bnt7wajf",
                     "rvdceqjh",
                     "5xhbk964",
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -423,7 +434,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                 [
                     "mknd4lci",
                     "riecov42"
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -443,65 +454,129 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     "wk": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-            [
-            "drlajpqc", 
-            "nhj2j7su",
-            ],  # device product_id
-            TuyaBLEProductInfo(  
-                name="Thermostatic Radiator Valve",
+                [
+                    "drlajpqc", 
+                    "nhj2j7su",
+                ],
+                TuyaBLEProductInfo(  
+                    name="Thermostatic Radiator Valve",
                 ),
             ),
         },
     ),
     "wsdcg": TuyaBLECategoryInfo(
         products={
-            "ojzlzzsw": TuyaBLEProductInfo(  # device product_id
+            "ojzlzzsw": TuyaBLEProductInfo(
                 name="Soil moisture sensor",
             ),
         },
     ),
     "znhsb": TuyaBLECategoryInfo(
         products={
-            "cdlandip":  # device product_id
-            TuyaBLEProductInfo(
+            "cdlandip": TuyaBLEProductInfo(
                 name="Smart water bottle",
             ),
         },
     ),
     "ggq": TuyaBLECategoryInfo(
         products={
-            "6pahkcau":  # device product_id
-            TuyaBLEProductInfo(
+            "6pahkcau": TuyaBLEProductInfo(
                 name="Irrigation computer",
             ),
         },
     ),
     "sfkzq": TuyaBLECategoryInfo(
         products={
-            "0axr5s0b":  # device product_id
-            TuyaBLEProductInfo(
+            "0axr8s0b": TuyaBLEProductInfo(
                 name="Valve controller",
             ),
         },
     ),
+    "cl": TuyaBLECategoryInfo(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],
+                TuyaBLEProductInfo(
+                    name="Blind Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": False
+                        },
+                    }
+                )
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0xpi"
+                ],
+                TuyaBLEProductInfo(
+                    name="Curtain Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "current_position": 3,
+                            "position_set": 2,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"
+                ],
+                TuyaBLEProductInfo(
+                    name="LY Curtain Motor Robot",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            ),
+        }
+    ),
     "dd": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-            [
-              "nvfrtxlq",
-            ],  # device product_id
-            TuyaBLEProductInfo(
-                name="LGB102 Magic Strip Lights",
-                manufacturer="Magiacous",
-		),
+                [
+                    "nvfrtxlq",
+                ],
+                TuyaBLEProductInfo(
+                    name="LGB102 Magic Strip Lights",
+                    manufacturer="Magiacous",
+                ),
             ),
         },
-        info = TuyaBLEProductInfo(
-                name="Strip Lights",
-		),
-
+        info=TuyaBLEProductInfo(
+            name="Strip Lights",
+        ),
     ),
 }
+
 
 def get_product_info_by_ids(
     category: str, product_id: str
@@ -579,4 +654,3 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
         ),
     )
     return result
-
