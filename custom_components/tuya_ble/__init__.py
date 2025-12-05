@@ -32,8 +32,11 @@ PLATFORMS: list[Platform] = [
 
 _LOGGER = logging.getLogger(__name__)
 
+# Type alias for ConfigEntry with runtime_data
+type TuyaBLEConfigEntry = ConfigEntry[TuyaBLEData]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+
+async def async_setup_entry(hass: HomeAssistant, entry: TuyaBLEConfigEntry) -> bool:
     """Set up Tuya BLE from a config entry."""
     address: str = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(
@@ -58,7 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Could not communicate with Tuya BLE device with address {address}"
         ) from ex
     '''
-    hass.add_job(device.update())
+    hass.async_create_task(device.update())
 
     @callback
     def _async_update_ble(
@@ -79,7 +82,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = TuyaBLEData(
+    # Use runtime_data instead of hass.data[DOMAIN]
+    entry.runtime_data = TuyaBLEData(
         entry.title,
         device,
         product_info,
@@ -100,17 +104,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_update_listener(hass: HomeAssistant, entry: TuyaBLEConfigEntry) -> None:
     """Handle options update."""
-    data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
-    if entry.title != data.title:
+    if entry.title != entry.runtime_data.title:
         await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: TuyaBLEConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        data: TuyaBLEData = hass.data[DOMAIN].pop(entry.entry_id)
-        await data.device.stop()
+        await entry.runtime_data.device.stop()
 
     return unload_ok
