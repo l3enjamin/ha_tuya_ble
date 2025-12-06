@@ -1,6 +1,7 @@
 """The Tuya BLE integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, get_device
@@ -33,6 +34,9 @@ PLATFORMS: list[Platform] = [
 
 _LOGGER = logging.getLogger(__name__)
 
+# Timeout for initial device status update
+INITIAL_UPDATE_TIMEOUT = 5.0  # seconds
+
 # Type alias for ConfigEntry with runtime_data
 type TuyaBLEConfigEntry = ConfigEntry[TuyaBLEData]
 
@@ -54,15 +58,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: TuyaBLEConfigEntry) -> b
 
     coordinator = TuyaBLECoordinator(hass, device)
 
-    '''
+    # Try to get initial device status with timeout
+    # If device hangs, continue anyway - entities will show as unavailable
+    # until device responds
     try:
-        await device.update()
+        await asyncio.wait_for(
+            device.update(),
+            timeout=INITIAL_UPDATE_TIMEOUT
+        )
+        _LOGGER.debug(
+            "Successfully got initial status for device %s",
+            address
+        )
+    except asyncio.TimeoutError:
+        _LOGGER.warning(
+            "Timeout waiting for initial status from device %s. "
+            "Integration will continue, entities will update when device responds.",
+            address
+        )
     except BLEAK_EXCEPTIONS as ex:
-        raise ConfigEntryNotReady(
-            f"Could not communicate with Tuya BLE device with address {address}"
-        ) from ex
-    '''
-    hass.async_create_task(device.update())
+        _LOGGER.warning(
+            "Error getting initial status from device %s: %s. "
+            "Integration will continue, entities will update when device responds.",
+            address,
+            ex
+        )
+    except Exception as ex:
+        _LOGGER.warning(
+            "Unexpected error getting initial status from device %s: %s. "
+            "Integration will continue, entities will update when device responds.",
+            address,
+            ex
+        )
 
     @callback
     def _async_update_ble(
