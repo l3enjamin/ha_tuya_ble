@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import asyncio
 import logging
 from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID, Platform
 
@@ -42,6 +43,9 @@ from .base import IntegerTypeData, EnumTypeData
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
+
+# BLE command timeout - device disconnects if unresponsive
+BLE_COMMAND_TIMEOUT = 2.0  # seconds
 
 
 @dataclass
@@ -122,46 +126,139 @@ class TuyaBLEEntity(CoordinatorEntity):
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
 
-    def send_dp_value(self,
+    async def send_dp_value_async(
+        self,
         key: DPCode | None,
         type: TuyaBLEDataPointType,
-        value: bytes | bool | int | str | None = None) -> None:
-
+        value: bytes | bool | int | str | None = None,
+    ) -> bool:
+        """Send DP value with timeout and error handling.
+        
+        Returns True if successful, False if failed/timeout.
+        Device may disconnect if DP is invalid!
+        """
+        if not self._device or not self._coordinator.connected:
+            _LOGGER.warning("Cannot send DP - device not connected")
+            return False
+            
         dpid = self.find_dpid(key)
-        if dpid is not None:
+        if dpid is None:
+            _LOGGER.warning("Cannot find DP ID for %s", key)
+            return False
+            
+        try:
             datapoint = self._device.datapoints.get_or_create(
-                    dpid,
-                    type,
-                    value,
+                dpid,
+                type,
+                value,
+            )
+            if datapoint:
+                # Use timeout to prevent hanging
+                await asyncio.wait_for(
+                    datapoint.set_value(value),
+                    timeout=BLE_COMMAND_TIMEOUT
                 )
-            self._hass.create_task(datapoint.set_value(value))
+                return True
+        except asyncio.TimeoutError:
+            _LOGGER.warning(
+                "Timeout sending DP %s (device may have disconnected)",
+                dpid
+            )
+            return False
+        except Exception as ex:
+            _LOGGER.warning(
+                "Error sending DP %s: %s (device may have disconnected)",
+                dpid,
+                ex
+            )
+            return False
+        
+        return False
 
-    
-    def _send_command(self, commands : list[dict[str, Any]]) -> None:
-        """Send the commands to the device"""
+    def send_dp_value(
+        self,
+        key: DPCode | None,
+        type: TuyaBLEDataPointType,
+        value: bytes | bool | int | str | None = None,
+    ) -> None:
+        """Legacy sync wrapper - schedules async send."""
+        self._hass.create_task(self.send_dp_value_async(key, type, value))
+
+    async def _send_command_async(self, commands: list[dict[str, Any]]) -> bool:
+        """Send commands sequentially with timeout.
+        
+        CRITICAL: Commands MUST be sent one-by-one!
+        Parallel commands cause device to disconnect.
+        
+        Returns True if all succeeded, False otherwise.
+        """
+        if not self._device or not self._coordinator.connected:
+            _LOGGER.warning("Cannot send commands - device not connected")
+            return False
+            
         for command in commands:
             code = command.get("code")
             value = command.get("value")
 
-            if code and value is not None:
-                dttype = self.get_dptype(code)
-                if isinstance(value, str):
-                    if dttype == DPType.STRING or dttype == DPType.JSON:
-                        self.send_dp_value(code, TuyaBLEDataPointType.DT_STRING, value)
-                    elif dttype == DPType.ENUM:
-                        int_value = 0
+            if not code or value is None:
+                continue
+                
+            # Check if still connected before each command
+            if not self._coordinator.connected:
+                _LOGGER.warning(
+                    "Device disconnected mid-command sequence, aborting"
+                )
+                return False
+
+            dttype = self.get_dptype(code)
+            success = False
+            
+            if isinstance(value, str):
+                if dttype == DPType.STRING or dttype == DPType.JSON:
+                    success = await self.send_dp_value_async(
+                        code, TuyaBLEDataPointType.DT_STRING, value
+                    )
+                elif dttype == DPType.ENUM:
+                    int_value = 0
+                    if code in self.device.function:
                         values = self.device.function[code].values
-                        if isinstance(self.device.function[code].values, dict):
-                            range = self.device.function[code].values.get("range")
-                            if isinstance(range, list):
-                                int_value = range.index(value) if value in range else None
-                        self.send_dp_value(code, TuyaBLEDataPointType.DT_ENUM, int_value)
+                        if isinstance(values, dict):
+                            range_list = values.get("range")
+                            if isinstance(range_list, list):
+                                int_value = (
+                                    range_list.index(value)
+                                    if value in range_list
+                                    else None
+                                )
+                    if int_value is not None:
+                        success = await self.send_dp_value_async(
+                            code, TuyaBLEDataPointType.DT_ENUM, int_value
+                        )
+            elif isinstance(value, bool):
+                success = await self.send_dp_value_async(
+                    code, TuyaBLEDataPointType.DT_BOOL, value
+                )
+            else:
+                success = await self.send_dp_value_async(
+                    code, TuyaBLEDataPointType.DT_VALUE, value
+                )
+            
+            if not success:
+                _LOGGER.warning(
+                    "Failed to send command %s=%s, stopping sequence",
+                    code,
+                    value
+                )
+                return False
+                
+            # Small delay between commands to avoid overwhelming device
+            await asyncio.sleep(0.1)
+        
+        return True
 
-                elif isinstance(value, bool):
-                    self.send_dp_value(code, TuyaBLEDataPointType.DT_BOOL, value)
-                else:
-                    self.send_dp_value(code, TuyaBLEDataPointType.DT_VALUE, value)
-
+    def _send_command(self, commands: list[dict[str, Any]]) -> None:
+        """Legacy sync wrapper - schedules async send."""
+        self._hass.create_task(self._send_command_async(commands))
 
     def find_dpid(
         self, dpcode: DPCode | None, prefer_function: bool = False
@@ -234,7 +331,6 @@ class TuyaBLEEntity(CoordinatorEntity):
                     return dpcode
 
         return None
-
 
     def get_dptype(
         self, dpcode: DPCode | None, prefer_function: bool = False
@@ -546,8 +642,8 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     datapoints={
                         Platform.COVER: {
                             "state": 1,
-                            "position_set": 2,
-                            "current_position": 3,
+                            "position_set": 3,
+                            "current_position": 2,
                             "supported_features": (
                                 CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
                                 CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
