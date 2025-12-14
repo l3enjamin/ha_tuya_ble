@@ -1,8 +1,6 @@
 """The Tuya BLE Cover integration."""
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
 import logging
 from enum import IntEnum
 from typing import Any
@@ -26,21 +24,18 @@ from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 _LOGGER = logging.getLogger(__name__)
 _PLATFORM = Platform.COVER
 
-class TuyaCoverState(IntEnum):
-    """Tuya Cover State Enum"""
+
+class TuyaCoverCommand(IntEnum):
+    """Tuya Cover Control Commands (DP1)."""
     OPEN = 0
     STOP = 1
     CLOSE = 2
+
 
 class TuyaBLECover(TuyaBLEEntity, CoverEntity):
     """Representation of a Tuya BLE Cover."""
 
     _PLATFORM = _PLATFORM
-
-    _attr_is_closed = False
-    _attr_is_opening = False
-    _attr_is_closing = False
-    _attr_current_cover_position = 0
 
     def __init__(
         self,
@@ -49,13 +44,29 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
     ) -> None:
+        """Initialize the cover."""
         description = EntityDescription(key="cover", name="Cover")
         super().__init__(hass, coordinator, device, product, description)
+        
+        # Initialize state attributes
+        self._attr_is_closed = None
+        self._attr_is_opening = False
+        self._attr_is_closing = False
+        self._attr_current_cover_position = None
 
     @property
     def supported_features(self) -> CoverEntityFeature:
         """Return the supported features of the device."""
-        return self.platform_config.get("supported_features")
+        features = self.platform_config.get("supported_features")
+        if features:
+            return features
+        # Default features if not specified
+        return (
+            CoverEntityFeature.OPEN 
+            | CoverEntityFeature.CLOSE 
+            | CoverEntityFeature.STOP
+            | CoverEntityFeature.SET_POSITION
+        )
 
     @property
     def device_class(self) -> CoverDeviceClass:
@@ -64,37 +75,39 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return additional state attributes including battery."""
+        """Return additional state attributes."""
         if not self._device or not hasattr(self._device, 'datapoints'):
             return None
             
         attributes = {}
         
         try:
-            # Add battery percentage if available
+            # Battery percentage (DP13)
             battery_dp = self.get_tuya_datapoint("battery_percentage")
             if battery_dp and battery_dp in self._device.datapoints:
                 battery_datapoint = self._device.datapoints[battery_dp]
                 if battery_datapoint:
                     attributes["battery_percentage"] = battery_datapoint.value
                     
-            # Add work state if available (DP7)
+            # Work state (DP7) - learning status, not movement!
             if 7 in self._device.datapoints:
                 work_state_dp = self._device.datapoints[7]
                 if work_state_dp:
+                    # 0=standby, 1=learning, 2=success, 3=fail
                     attributes["work_state"] = work_state_dp.value
                 
-            # Add fault status if available (DP12)
+            # Fault status (DP12)
             if 12 in self._device.datapoints:
                 fault_dp = self._device.datapoints[12]
                 if fault_dp:
                     attributes["fault_code"] = fault_dp.value
                     
-            # Add temperature if available (DP103)
+            # Temperature (DP103) - scaled by 10
             if 103 in self._device.datapoints:
                 temp_dp = self._device.datapoints[103]
                 if temp_dp:
-                    attributes["temperature"] = temp_dp.value
+                    attributes["temperature"] = temp_dp.value / 10.0
+                    
         except Exception as ex:
             _LOGGER.debug(
                 "Error getting extra attributes for %s: %s",
@@ -111,37 +124,45 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
             return
             
         try:
-            cover_state_dp = self.get_tuya_datapoint("state")
+            # Get current position from DP3 (percent_state)
             cover_position_dp = self.get_tuya_datapoint("current_position")
-            
-            if cover_state_dp and cover_state_dp in self._device.datapoints:
-                datapoint = self._device.datapoints[cover_state_dp]
-                if datapoint:
-                    self._attr_is_opening = False
-                    self._attr_is_closing = False
-                    match datapoint.value:
-                        case 0:
-                            self._attr_is_opening = True
-                        case 1:
-                            pass  # motor has stopped
-                        case 2:
-                            self._attr_is_closing = True
-
             if cover_position_dp and cover_position_dp in self._device.datapoints:
                 datapoint = self._device.datapoints[cover_position_dp]
-                if datapoint:
-                    self._attr_current_cover_position = 100 - int(datapoint.value)
+                if datapoint and datapoint.value is not None:
+                    # Tuya: 0=open, 100=closed
+                    # HA: 0=closed, 100=open
+                    # So we need to invert!
+                    tuya_position = int(datapoint.value)
+                    self._attr_current_cover_position = 100 - tuya_position
+                    
+                    # Update closed state
                     if self._attr_current_cover_position == 0:
                         self._attr_is_closed = True
-                        self._attr_is_closing = False
-                    else:
+                    elif self._attr_current_cover_position > 0:
                         self._attr_is_closed = False
+            
+            # Get control state from DP1 (control enum)
+            # Note: DP1 shows LAST command sent, not necessarily current movement!
+            cover_state_dp = self.get_tuya_datapoint("state")
+            if cover_state_dp and cover_state_dp in self._device.datapoints:
+                datapoint = self._device.datapoints[cover_state_dp]
+                if datapoint and datapoint.value is not None:
+                    # Reset movement flags first
+                    self._attr_is_opening = False
+                    self._attr_is_closing = False
+                    
+                    # Only set movement flags if not at target position
+                    match datapoint.value:
+                        case 0:  # OPEN command
+                            if self._attr_current_cover_position != 100:
+                                self._attr_is_opening = True
+                        case 1:  # STOP command
+                            pass  # Movement stopped
+                        case 2:  # CLOSE command
+                            if self._attr_current_cover_position != 0:
+                                self._attr_is_closing = True
 
-                    if self._attr_current_cover_position == 100:
-                        self._attr_is_closed = False
-                        self._attr_is_opening = False
-
-            # Direct call - don't schedule, let coordinator handle it
+            # Write state to HA
             self.async_write_ha_state()
             
         except Exception as ex:
@@ -151,142 +172,125 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
                 ex,
             )
 
-    def _update_cover_state_without_validation(self, state: TuyaCoverState) -> None:
-        """Update cover state without waiting for validation."""
+    async def _send_control_command(self, command: TuyaCoverCommand) -> None:
+        """Send control command to DP1 (enum type)."""
         if not self._device:
+            _LOGGER.warning("Cannot send command - device not available")
             return
             
         cover_state_dp = self.get_tuya_datapoint("state")
-        if cover_state_dp and cover_state_dp != 0:
-            try:
-                datapoint = self._device.datapoints.get_or_create(
-                    cover_state_dp,
-                    TuyaBLEDataPointType.DT_VALUE,
-                    state.value,
-                )
-                if datapoint:
-                    self._hass.create_task(datapoint.set_value(state.value))
-            except Exception as ex:
-                _LOGGER.warning(
-                    "Error updating cover state without validation: %s",
-                    ex,
-                )
-
-    async def _validate_data_update_from_device_and_reconnect_if_needed(
-        self,
-        sleep_ms: int = 1000,
-        time_now: datetime | None = None,
-    ) -> None:
-        """Validate that device responds within timeout."""
-        if not self._device:
+        if not cover_state_dp:
+            _LOGGER.warning("No state datapoint configured")
             return
-            
-        time_now = time_now or datetime.now(timezone.utc)
-        await asyncio.sleep(sleep_ms / 1000.0)
         
         try:
-            # Check if device is paired and has responded recently
-            if hasattr(self._device, '_is_paired'):
-                is_paired = self._device._is_paired
-            else:
-                is_paired = self._device.is_paired if hasattr(self._device, 'is_paired') else False
+            # DP1 is DT_ENUM type! Not DT_VALUE!
+            success = await self.send_dp_value_async(
+                None,  # dpcode (we use dpid directly)
+                TuyaBLEDataPointType.DT_ENUM,
+                command.value
+            )
+            
+            if success:
+                # Optimistically update local state
+                self._attr_is_opening = False
+                self._attr_is_closing = False
                 
-            if is_paired and (
-                not self._device.last_data_received
-                or self._device.last_data_received < time_now
-            ):
+                match command:
+                    case TuyaCoverCommand.OPEN:
+                        if self._attr_current_cover_position != 100:
+                            self._attr_is_opening = True
+                    case TuyaCoverCommand.CLOSE:
+                        if self._attr_current_cover_position != 0:
+                            self._attr_is_closing = True
+                    case TuyaCoverCommand.STOP:
+                        pass  # Stop clears movement flags
+                
+                self.async_write_ha_state()
+            else:
                 _LOGGER.warning(
-                    "No data received from device (cover) %s within %dms, manually requesting status update",
-                    self._device.name,
-                    sleep_ms,
+                    "Failed to send control command %s",
+                    command.name
                 )
-                await self._device.update()
+                
         except Exception as ex:
-            _LOGGER.debug(
-                "Error validating data update: %s",
+            _LOGGER.error(
+                "Error sending control command %s: %s",
+                command.name,
                 ex,
             )
 
-    def _update_ha_state_for_cover_state(self, state: TuyaCoverState) -> None:
-        """Update HA state based on cover command."""
-        self._attr_is_closed = False
-        self._attr_is_closing = False
-        self._attr_is_opening = False
-
-        if self._attr_current_cover_position == 0:
-            self._attr_is_closed = True
-
-        if state == TuyaCoverState.OPEN and self._attr_current_cover_position != 100:
-            self._attr_is_opening = True
-        elif state == TuyaCoverState.CLOSE and self._attr_current_cover_position != 0:
-            self._attr_is_closing = True
-        self.async_write_ha_state()
-
-    async def _update_cover_state(self, state: TuyaCoverState) -> None:
-        """Change state from open, close and stop action."""
-        if not self._device:
-            _LOGGER.warning("Cannot update cover state - device not available")
-            return
-            
-        cover_state_dp = self.get_tuya_datapoint("state")
-        
-        if cover_state_dp:
-            # Use add_job for validation - don't block on it
-            # This prevents hanging the event loop
-            self._hass.add_job(
-                self._validate_data_update_from_device_and_reconnect_if_needed(
-                    time_now=datetime.now(timezone.utc)
-                )
-            )
-            # Send command without waiting
-            self._update_cover_state_without_validation(state)
-            # Update local state immediately
-            self._update_ha_state_for_cover_state(state)
-            return
-
-        # If no state DP, try position-based control
-        cover_position_dp = self.get_tuya_datapoint("current_position")
-        if cover_position_dp:
-            if state == TuyaCoverState.CLOSE:
-                await self.async_set_cover_position(position=0)
-            elif state == TuyaCoverState.OPEN:
-                await self.async_set_cover_position(position=100)
-
     async def async_open_cover(self, **kwargs) -> None:
-        """Open a cover."""
-        await self._update_cover_state(TuyaCoverState.OPEN)
-
-    async def async_stop_cover(self, **kwargs: logging.Any) -> None:
-        """Stop a cover."""
-        await self._update_cover_state(TuyaCoverState.STOP)
+        """Open the cover."""
+        await self._send_control_command(TuyaCoverCommand.OPEN)
 
     async def async_close_cover(self, **kwargs) -> None:
-        """Close a cover."""
-        await self._update_cover_state(TuyaCoverState.CLOSE)
+        """Close the cover."""
+        await self._send_control_command(TuyaCoverCommand.CLOSE)
 
-    async def async_set_cover_position(self, **kwargs: logging.Any) -> None:
-        """Set cover position."""
+    async def async_stop_cover(self, **kwargs) -> None:
+        """Stop the cover."""
+        await self._send_control_command(TuyaCoverCommand.STOP)
+
+    async def async_set_cover_position(self, **kwargs) -> None:
+        """Set cover position using DP2 (percent_control)."""
         if not self._device:
-            _LOGGER.warning("Cannot set cover position - device not available")
+            _LOGGER.warning("Cannot set position - device not available")
             return
             
-        position = 100 - kwargs[ATTR_POSITION]
-        position_set_dp = self.get_tuya_datapoint("position_set")
+        # Get HA position (0=closed, 100=open)
+        ha_position = kwargs.get(ATTR_POSITION)
+        if ha_position is None:
+            _LOGGER.warning("No position provided")
+            return
         
-        if position_set_dp:
-            try:
-                datapoint = self._device.datapoints.get_or_create(
-                    position_set_dp,
-                    TuyaBLEDataPointType.DT_VALUE,
-                    position
-                )
-                if datapoint:
-                    self._hass.create_task(datapoint.set_value(position))
-            except Exception as ex:
+        # Convert to Tuya position (0=open, 100=closed)
+        tuya_position = 100 - int(ha_position)
+        
+        position_set_dp = self.get_tuya_datapoint("position_set")
+        if not position_set_dp:
+            _LOGGER.warning("No position_set datapoint configured")
+            return
+        
+        try:
+            # DP2 is DT_VALUE type (0-100)
+            success = await self.send_dp_value_async(
+                None,  # dpcode (we use dpid directly)
+                TuyaBLEDataPointType.DT_VALUE,
+                tuya_position
+            )
+            
+            if success:
+                # Optimistically update position
+                self._attr_current_cover_position = ha_position
+                
+                # Set movement flags
+                self._attr_is_opening = False
+                self._attr_is_closing = False
+                if ha_position > (self._attr_current_cover_position or 0):
+                    self._attr_is_opening = True
+                elif ha_position < (self._attr_current_cover_position or 0):
+                    self._attr_is_closing = True
+                
+                # Update closed state
+                if ha_position == 0:
+                    self._attr_is_closed = True
+                else:
+                    self._attr_is_closed = False
+                    
+                self.async_write_ha_state()
+            else:
                 _LOGGER.warning(
-                    "Error setting cover position: %s",
-                    ex,
+                    "Failed to set cover position to %d%%",
+                    ha_position
                 )
+                
+        except Exception as ex:
+            _LOGGER.error(
+                "Error setting cover position to %d%%: %s",
+                ha_position,
+                ex,
+            )
 
 
 async def async_setup_entry(
@@ -303,6 +307,7 @@ async def async_setup_entry(
         )
         return
     
+    # Check if this device supports cover platform
     if (
         data.product.datapoints
         and Platform.COVER in data.product.datapoints
