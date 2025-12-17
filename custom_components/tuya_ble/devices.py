@@ -600,6 +600,8 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     manufacturer="Tuya",
                     datapoints={
                         Platform.COVER: {
+                            "state": 1,
+                            "battery_percentage": 13,
                             "position_set": 2,
                             "current_position": 3,
                             "supported_features": (
@@ -613,7 +615,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             ),
             **dict.fromkeys(
                 [
-                    "kcy0xpi"
+                    "kcy0x4pi"
                 ],
                 TuyaBLEProductInfo(
                     name="Curtain Controller",
@@ -621,8 +623,9 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     datapoints={
                         Platform.COVER: {
                             "state": 1,
-                            "current_position": 3,
+                            "battery_percentage": 13,
                             "position_set": 2,
+                            "current_position": 3,
                             "supported_features": (
                                 CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
                                 CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
@@ -642,8 +645,9 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     datapoints={
                         Platform.COVER: {
                             "state": 1,
-                            "position_set": 3,
-                            "current_position": 2,
+                            "battery_percentage": 13,
+                            "position_set": 2,
+                            "current_position": 3,
                             "supported_features": (
                                 CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
                                 CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
