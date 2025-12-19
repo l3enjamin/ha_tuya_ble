@@ -179,6 +179,12 @@ class TuyaBLEDataPoints:
 
     def __getitem__(self, key: int) -> TuyaBLEDataPoint | None:
         return self._datapoints.get(key)
+        
+    def __contains__(self, key: int) -> bool:
+        return key in self._datapoints
+
+    def __iter__(self):
+        return iter(self._datapoints)
 
     def has_id(self, id: int, type: TuyaBLEDataPointType | None = None) -> bool:
         return (id in self._datapoints) and (

@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import asyncio
 import logging
-from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
+from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID, Platform
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -18,6 +19,7 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from homeassistant.components.cover import CoverEntityFeature
 
 from home_assistant_bluetooth import BluetoothServiceInfoBleak
 from .tuya_ble import (
@@ -42,6 +44,9 @@ from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
+# BLE command timeout - device disconnects if unresponsive
+BLE_COMMAND_TIMEOUT = 2.0  # seconds
+
 
 @dataclass
 class TuyaBLEFingerbotInfo:
@@ -60,6 +65,14 @@ class TuyaBLEProductInfo:
     name: str
     manufacturer: str = DEVICE_DEF_MANUFACTURER
     fingerbot: TuyaBLEFingerbotInfo | None = None
+    datapoints: dict[Platform, dict[str, int] | list[dict[str, int]]] | None = None
+
+
+@dataclass
+class TuyaBLECategoryInfo:
+    products: dict[str, TuyaBLEProductInfo]
+    info: TuyaBLEProductInfo | None = None
+
 
 class TuyaBLEEntity(CoordinatorEntity):
     """Tuya BLE base entity."""
@@ -67,7 +80,7 @@ class TuyaBLEEntity(CoordinatorEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        coordinator: TuyaBLECoordinator,
+        coordinator: DataUpdateCoordinator,
         device: TuyaBLEDevice,
         product: TuyaBLEProductInfo,
         description: EntityDescription,
@@ -97,52 +110,155 @@ class TuyaBLEEntity(CoordinatorEntity):
         """Return the associated BLE Device."""
         return self._device
 
+    @property
+    def platform_config(self) -> dict:
+        """Return the platform configuration."""
+        if hasattr(self, '_PLATFORM') and self._product.datapoints:
+            return self._product.datapoints.get(self._PLATFORM, {})
+        return {}
+
+    def get_tuya_datapoint(self, datapoint) -> int:
+        """Return a datapoint from config."""
+        return self.platform_config.get(datapoint)
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
 
-    def send_dp_value(self,
+    async def send_dp_value_async(
+        self,
         key: DPCode | None,
         type: TuyaBLEDataPointType,
-        value: bytes | bool | int | str | None = None) -> None:
-
+        value: bytes | bool | int | str | None = None,
+    ) -> bool:
+        """Send DP value with timeout and error handling.
+        
+        Returns True if successful, False if failed/timeout.
+        Device may disconnect if DP is invalid!
+        """
+        if not self._device or not self._coordinator.connected:
+            _LOGGER.warning("Cannot send DP - device not connected")
+            return False
+            
         dpid = self.find_dpid(key)
-        if dpid is not None:
+        if dpid is None:
+            _LOGGER.warning("Cannot find DP ID for %s", key)
+            return False
+            
+        try:
             datapoint = self._device.datapoints.get_or_create(
-                    dpid,
-                    type,
-                    value,
+                dpid,
+                type,
+                value,
+            )
+            if datapoint:
+                # Use timeout to prevent hanging
+                await asyncio.wait_for(
+                    datapoint.set_value(value),
+                    timeout=BLE_COMMAND_TIMEOUT
                 )
-            self._hass.create_task(datapoint.set_value(value))
+                return True
+        except asyncio.TimeoutError:
+            _LOGGER.warning(
+                "Timeout sending DP %s (device may have disconnected)",
+                dpid
+            )
+            return False
+        except Exception as ex:
+            _LOGGER.warning(
+                "Error sending DP %s: %s (device may have disconnected)",
+                dpid,
+                ex
+            )
+            return False
+        
+        return False
 
-    
-    def _send_command(self, commands : list[dict[str, Any]]) -> None:
-        """Send the commands to the device"""
+    def send_dp_value(
+        self,
+        key: DPCode | None,
+        type: TuyaBLEDataPointType,
+        value: bytes | bool | int | str | None = None,
+    ) -> None:
+        """Legacy sync wrapper - schedules async send."""
+        self._hass.create_task(self.send_dp_value_async(key, type, value))
+
+    async def _send_command_async(self, commands: list[dict[str, Any]]) -> bool:
+        """Send commands sequentially with timeout.
+        
+        CRITICAL: Commands MUST be sent one-by-one!
+        Parallel commands cause device to disconnect.
+        
+        Returns True if all succeeded, False otherwise.
+        """
+        if not self._device or not self._coordinator.connected:
+            _LOGGER.warning("Cannot send commands - device not connected")
+            return False
+            
         for command in commands:
             code = command.get("code")
             value = command.get("value")
 
-            if code and value is not None:
-                dttype = self.get_dptype(code)
-                if isinstance(value, str):
-                    # We suppose here that cloud JSON type are sent as string
-                    if dttype == DPType.STRING or dttype == DPType.JSON:
-                        self.send_dp_value(code, TuyaBLEDataPointType.DT_STRING, value)
-                    elif dttype == DPType.ENUM:
-                        int_value = 0
+            if not code or value is None:
+                continue
+                
+            # Check if still connected before each command
+            if not self._coordinator.connected:
+                _LOGGER.warning(
+                    "Device disconnected mid-command sequence, aborting"
+                )
+                return False
+
+            dttype = self.get_dptype(code)
+            success = False
+            
+            if isinstance(value, str):
+                if dttype == DPType.STRING or dttype == DPType.JSON:
+                    success = await self.send_dp_value_async(
+                        code, TuyaBLEDataPointType.DT_STRING, value
+                    )
+                elif dttype == DPType.ENUM:
+                    int_value = 0
+                    if code in self.device.function:
                         values = self.device.function[code].values
-                        if isinstance(self.device.function[code].values, dict):
-                            range = self.device.function[code].values.get("range")
-                            if isinstance(range, list):
-                                int_value = range.index(value) if value in range else None
-                        self.send_dp_value(code, TuyaBLEDataPointType.DT_ENUM, int_value)
+                        if isinstance(values, dict):
+                            range_list = values.get("range")
+                            if isinstance(range_list, list):
+                                int_value = (
+                                    range_list.index(value)
+                                    if value in range_list
+                                    else None
+                                )
+                    if int_value is not None:
+                        success = await self.send_dp_value_async(
+                            code, TuyaBLEDataPointType.DT_ENUM, int_value
+                        )
+            elif isinstance(value, bool):
+                success = await self.send_dp_value_async(
+                    code, TuyaBLEDataPointType.DT_BOOL, value
+                )
+            else:
+                success = await self.send_dp_value_async(
+                    code, TuyaBLEDataPointType.DT_VALUE, value
+                )
+            
+            if not success:
+                _LOGGER.warning(
+                    "Failed to send command %s=%s, stopping sequence",
+                    code,
+                    value
+                )
+                return False
+                
+            # Small delay between commands to avoid overwhelming device
+            await asyncio.sleep(0.1)
+        
+        return True
 
-                elif isinstance(value, bool):
-                    self.send_dp_value(code, TuyaBLEDataPointType.DT_BOOL, value)
-                else:
-                    self.send_dp_value(code, TuyaBLEDataPointType.DT_VALUE, value)
-
+    def _send_command(self, commands: list[dict[str, Any]]) -> None:
+        """Legacy sync wrapper - schedules async send."""
+        self._hass.create_task(self._send_command_async(commands))
 
     def find_dpid(
         self, dpcode: DPCode | None, prefer_function: bool = False
@@ -180,8 +296,6 @@ class TuyaBLEEntity(CoordinatorEntity):
         if prefer_function:
             order = ["function", "status_range"]
 
-        # When we are not looking for a specific datatype, we can append status for
-        # searching
         if not dptype:
             order.append("status")
 
@@ -218,7 +332,6 @@ class TuyaBLEEntity(CoordinatorEntity):
 
         return None
 
-
     def get_dptype(
         self, dpcode: DPCode | None, prefer_function: bool = False
     ) -> DPType | None:
@@ -234,8 +347,6 @@ class TuyaBLEEntity(CoordinatorEntity):
                 return DPType(getattr(self.device, key)[dpcode].type)
 
         return None
-
-
 
 
 class TuyaBLECoordinator(DataUpdateCoordinator[None]):
@@ -265,7 +376,9 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             self._unsub_disconnect()
         if self._disconnected:
             self._disconnected = False
-            self.async_update_listeners()
+            # Schedule listener updates as background task to avoid blocking
+            # This prevents deadlock when called during device connection
+            self.hass.loop.call_soon(self.async_update_listeners)
 
     @callback
     def _async_handle_update(self, updates: list[TuyaBLEDataPoint]) -> None:
@@ -312,16 +425,10 @@ class TuyaBLEData:
     coordinator: TuyaBLECoordinator
 
 
-@dataclass
-class TuyaBLECategoryInfo:
-    products: dict[str, TuyaBLEProductInfo]
-    info: TuyaBLEProductInfo | None = None
-
-
 devices_database: dict[str, TuyaBLECategoryInfo] = {
     "co2bj": TuyaBLECategoryInfo(
         products={
-            "59s19z5m": TuyaBLEProductInfo(  # device product_id
+            "59s19z5m": TuyaBLEProductInfo(
                 name="CO2 Detector",
             ),
         },
@@ -333,7 +440,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "ludzroix",
                     "isk2p555"
                 ],
-                    TuyaBLEProductInfo(  # device product_id
+                TuyaBLEProductInfo(
                     name="Smart Lock",
                 ),
             ),
@@ -341,14 +448,14 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     ),
     "jtmspro": TuyaBLECategoryInfo(
         products={
-            "xicdxood": TuyaBLEProductInfo(  # device product_id
+            "xicdxood": TuyaBLEProductInfo(
                 name="Raycube K7 Pro+",
             ),
         },
     ),
     "szjqr": TuyaBLECategoryInfo(
         products={
-            "3yqdo5yt": TuyaBLEProductInfo(  # device product_id
+            "3yqdo5yt": TuyaBLEProductInfo(
                 name="CUBETOUCH 1s",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -359,7 +466,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     reverse_positions=4,
                 ),
             ),
-            "xhf790if": TuyaBLEProductInfo(  # device product_id
+            "xhf790if": TuyaBLEProductInfo(
                 name="CubeTouch II",
                 fingerbot=TuyaBLEFingerbotInfo(
                     switch=1,
@@ -377,7 +484,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "yiihr7zh",
                     "riecov42",
                     "neq16kgd"
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -401,7 +508,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "bnt7wajf",
                     "rvdceqjh",
                     "5xhbk964",
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -423,7 +530,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                 [
                     "mknd4lci",
                     "riecov42"
-                ],  # device product_ids
+                ],
                 TuyaBLEProductInfo(
                     name="Fingerbot Plus",
                     fingerbot=TuyaBLEFingerbotInfo(
@@ -443,65 +550,133 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
     "wk": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-            [
-            "drlajpqc", 
-            "nhj2j7su",
-            ],  # device product_id
-            TuyaBLEProductInfo(  
-                name="Thermostatic Radiator Valve",
+                [
+                    "drlajpqc", 
+                    "nhj2j7su",
+                ],
+                TuyaBLEProductInfo(  
+                    name="Thermostatic Radiator Valve",
                 ),
             ),
         },
     ),
     "wsdcg": TuyaBLECategoryInfo(
         products={
-            "ojzlzzsw": TuyaBLEProductInfo(  # device product_id
+            "ojzlzzsw": TuyaBLEProductInfo(
                 name="Soil moisture sensor",
             ),
         },
     ),
     "znhsb": TuyaBLECategoryInfo(
         products={
-            "cdlandip":  # device product_id
-            TuyaBLEProductInfo(
+            "cdlandip": TuyaBLEProductInfo(
                 name="Smart water bottle",
             ),
         },
     ),
     "ggq": TuyaBLECategoryInfo(
         products={
-            "6pahkcau":  # device product_id
-            TuyaBLEProductInfo(
+            "6pahkcau": TuyaBLEProductInfo(
                 name="Irrigation computer",
             ),
         },
     ),
     "sfkzq": TuyaBLECategoryInfo(
         products={
-            "0axr5s0b":  # device product_id
-            TuyaBLEProductInfo(
+            "0axr8s0b": TuyaBLEProductInfo(
                 name="Valve controller",
             ),
         },
     ),
+    "cl": TuyaBLECategoryInfo(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],
+                TuyaBLEProductInfo(
+                    name="Blind Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "battery_percentage": 13,
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": False
+                        },
+                    }
+                )
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0x4pi"
+                ],
+                TuyaBLEProductInfo(
+                    name="Curtain Controller",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "battery_percentage": 13,
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"
+                ],
+                TuyaBLEProductInfo(
+                    name="LY Curtain Motor Robot",
+                    manufacturer="Tuya",
+                    datapoints={
+                        Platform.COVER: {
+                            "state": 1,
+                            "battery_percentage": 13,
+                            "position_set": 2,
+                            "current_position": 3,
+                            "supported_features": (
+                                CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+                                CoverEntityFeature.SET_POSITION | CoverEntityFeature.STOP
+                            ),
+                            "use_state_set": True
+                        },
+                    }
+                )
+            ),
+        }
+    ),
     "dd": TuyaBLECategoryInfo(
         products={
             **dict.fromkeys(
-            [
-              "nvfrtxlq",
-            ],  # device product_id
-            TuyaBLEProductInfo(
-                name="LGB102 Magic Strip Lights",
-                manufacturer="Magiacous",
-		),
+                [
+                    "nvfrtxlq",
+                ],
+                TuyaBLEProductInfo(
+                    name="LGB102 Magic Strip Lights",
+                    manufacturer="Magiacous",
+                ),
             ),
         },
-        info = TuyaBLEProductInfo(
-                name="Strip Lights",
-		),
-
+        info=TuyaBLEProductInfo(
+            name="Strip Lights",
+        ),
     ),
 }
+
 
 def get_product_info_by_ids(
     category: str, product_id: str
@@ -579,4 +754,3 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
         ),
     )
     return result
-

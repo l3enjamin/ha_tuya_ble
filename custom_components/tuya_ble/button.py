@@ -10,12 +10,11 @@ from homeassistant.components.button import (
     ButtonEntityDescription,
     ButtonEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN
+from . import TuyaBLEConfigEntry
 from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
@@ -188,11 +187,11 @@ class TuyaBLEButton(TuyaBLEEntity, ButtonEntity):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: TuyaBLEConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Tuya BLE sensors."""
-    data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
+    data: TuyaBLEData = entry.runtime_data
     mappings = get_mapping_by_device(data.device)
     entities: list[TuyaBLEButton] = []
     for mapping in mappings:

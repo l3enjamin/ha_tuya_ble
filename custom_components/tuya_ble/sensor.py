@@ -12,7 +12,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
@@ -26,6 +25,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from . import TuyaBLEConfigEntry
 from .const import (
     BATTERY_STATE_HIGH,
     BATTERY_STATE_LOW,
@@ -35,7 +35,6 @@ from .const import (
     BATTERY_NOT_CHARGING,
     CO2_LEVEL_ALARM,
     CO2_LEVEL_NORMAL,
-    DOMAIN,
 )
 from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
@@ -389,6 +388,60 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
             ],
         },
     ),
+    # Curtain Motors with Battery & Temperature
+    "cl": TuyaBLECategorySensorMapping(
+        products={
+            **dict.fromkeys(
+                [
+                    "4pbr8eig",
+                    "qqdxfdht"
+                ],  # Blind Controller
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "kcy0xpi"
+                ],  # Curtain Controller  
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    TuyaBLETemperatureMapping(dp_id=103),
+                ],
+            ),
+            **dict.fromkeys(
+                [
+                    "ulughw4g"  # LY Curtain Motor Robot
+                ],
+                [
+                    TuyaBLEBatteryMapping(dp_id=13),
+                    # Temperature sensor - no coefficient needed, value is already in correct units
+                    # API shows scale=1 but actual value is already degrees Celsius (e.g., 20 = 20°C)
+                    TuyaBLETemperatureMapping(dp_id=103),
+                    TuyaBLESensorMapping(
+                        dp_id=7,
+                        description=SensorEntityDescription(
+                            key="work_state",
+                            icon="mdi:state-machine",
+                            device_class=SensorDeviceClass.ENUM,
+                            options=[
+                                "standby",
+                                "learning",
+                                "success",
+                                "fail",
+                            ],
+                        ),
+                        icons=[
+                            "mdi:sleep",
+                            "mdi:school",
+                            "mdi:check-circle",
+                            "mdi:alert-circle",
+                        ],
+                    ),
+                ],
+            ),
+        },
+    ),
 }
 
 
@@ -480,11 +533,11 @@ class TuyaBLESensor(TuyaBLEEntity, SensorEntity):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: TuyaBLEConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Tuya BLE sensors."""
-    data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
+    data: TuyaBLEData = entry.runtime_data
     mappings = get_mapping_by_device(data.device)
     entities: list[TuyaBLESensor] = [
         TuyaBLESensor(
